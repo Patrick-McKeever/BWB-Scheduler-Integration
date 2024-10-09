@@ -230,7 +230,7 @@ class TaskJson:
         # strip quotes if present
         if key[0] == key[-1] and key.startswith(("'", '"')):
             key = key[1:-1]
-        self.jsonObj["env"].append({"key": key, "val": val})
+        self.jsonObj["envs"].append({"key": key, "val": val})
 
     # need to fix this so that we can add parameters for maxWorkers and threads per worker
     def addThreadsRam(self, nThreads, ram):
@@ -351,6 +351,7 @@ class DockerClient:
         scheduleSettings=None,
         iterateSettings=None,
         iterate=False,
+        outputFile=None
     ):
         tasksJson = []
         count = 0
@@ -383,7 +384,23 @@ class DockerClient:
         with open(jsonFile, "w") as outfile:
             json.dump(dockerJson.jsonObj, outfile)
         parms=[namespace,jsonFile,cpuCount,memory]
-        consoleProc.start(parms,schedule=True)
+        r = requests.post("http://localhost:8000/docker/start",
+            json=dockerJson.jsonObj)
+
+        if r.status_code == 200:
+            result = r.json()
+            sys.stderr.write("Received following from docker/start endpoint\n")
+            sys.stderr.write(str(result) + "\n")
+            if result["success"]:
+                with open(outputFile, 'w+') as f:
+                    sys.stderr.write("Writing outputs to " + outputFile + "\n")
+                    json.dump([ result["outputs"] ], f)
+                if consoleProc.finishHandler:
+                    # Any non-zero code or status is interpreted as error.
+                    consoleProc.finishHandler(code=0, status=0)
+        
+        if consoleProc.finishHandler:
+            consoleProc.finishHandler(code=1, status=-1)
         
     def prettyEnv(self,var):
         if type(var) is list:

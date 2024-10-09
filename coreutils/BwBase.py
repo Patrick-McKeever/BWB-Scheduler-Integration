@@ -2371,6 +2371,7 @@ class OWBwBWidget(widget.OWWidget):
                 scheduleSettings=None,
                 iterateSettings=self.iterateSettings,
                 iterate=self.iterate,
+                outputFile=self.varOutputFile
             )
         else:
             self.dockerClient.create_container_iter(

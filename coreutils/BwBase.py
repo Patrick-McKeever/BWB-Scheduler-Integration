@@ -2356,6 +2356,8 @@ class OWBwBWidget(widget.OWWidget):
             runDockerMapFlag=self.data["runDockerMap"]
         if "nextFlowMap" in self.data:
             nextFlowMapFlag=self.data["nextFlowMap"]
+        sys.stderr.write('\n\n\n\n\n\n\n\n\nRUN ID {}\n\n\n\n\n'.format(str(self.__dict__)))
+        runId = self.signalManager.runId
         if hasattr(self, "useScheduler") and self.useScheduler:
             self.dockerClient.create_container_external(
                 imageName,
@@ -2371,7 +2373,8 @@ class OWBwBWidget(widget.OWWidget):
                 scheduleSettings=None,
                 iterateSettings=self.iterateSettings,
                 iterate=self.iterate,
-                outputFile=self.varOutputFile
+                outputFile=self.varOutputFile,
+                runId=runId
             )
         else:
             self.dockerClient.create_container_iter(
@@ -2389,7 +2392,8 @@ class OWBwBWidget(widget.OWWidget):
                 iterateSettings=self.iterateSettings,
                 iterate=self.iterate,
                 runDockerMap=runDockerMapFlag,
-                nextFlowMap=nextFlowMapFlag
+                nextFlowMap=nextFlowMapFlag,
+                runId=runId
             )
         # except BaseException as e:
         # self.bgui.reenableAll(self)

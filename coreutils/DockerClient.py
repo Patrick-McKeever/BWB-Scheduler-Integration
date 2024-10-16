@@ -5,6 +5,7 @@ import subprocess
 from docker import APIClient
 from PyQt5.QtCore import QThread, pyqtSignal, QProcess, Qt
 from PyQt5 import QtWidgets, QtGui, QtCore
+from fsspec.implementations.local import LocalFileSystem
 import datetime
 import uuid
 import time
@@ -282,6 +283,48 @@ class DockerClient:
         #self.findShareMountPoint()
         self.logFile = None
         self.schedulerStarted = False
+        self.local_fs = LocalFileSystem()
+        self.remote_fs = LocalFileSystem()
+    
+    def sync_dir(self, local_path, remote_path):
+        for root, dirs, files in os.walk(local_path):
+            for name in dirs:
+                local_dir = os.path.join(root, name)
+                rel_path = os.path.relpath(local_dir, local_path)
+                remote_dir = "{}/{}".format(remote_path, rel_path)
+
+                if not self.remote_fs.exists(remote_dir):
+                    print("Creating directory {}".format(remote_dir))
+                    self.remote_fs.mkdir(remote_dir)
+            for name in files:
+                local_file = os.path.join(root, name)
+                rel_path = os.path.relpath(local_file, local_path)
+                remote_file = "{}/{}".format(remote_path, rel_path)
+
+                if not self.remote_fs.exists(remote_file):
+                    self.remote_fs.put(local_file, remote_file)
+
+
+    def download_file(self, filename, download_path):
+        sys.stderr.write("\n\nDownloading {} to {}\n\n".format(filename, download_path))
+        if self.remote_fs.exists(filename):
+            if self.remote_fs.isdir(filename):
+                self.remote_fs.get(filename, download_path, recursive=True)
+            if self.remote_fs.isfile(filename):
+                self.remote_fs.get(filename, download_path, auto_mkdir=True)
+
+    def get_remote_path(self, path, runId):
+        return "/shared/{}/{}".format(runId, path)
+        
+
+    def download_file_deps(self, cmd, runId):
+        for word in cmd.split():
+            if os.path.isabs(word):
+                if not os.path.exists(word):
+                    self.download_file(
+                        self.get_remote_path(word, runId), 
+                        word)
+
 
     def getClient(self):
         return self.cli
@@ -351,8 +394,10 @@ class DockerClient:
         scheduleSettings=None,
         iterateSettings=None,
         iterate=False,
-        outputFile=None
+        outputFile=None,
+        runId=None
     ):
+        sys.stderr.write("\n\n\nRUNID: {}\n\n\n".format(runId))
         tasksJson = []
         count = 0
         cpuCount='8'
@@ -442,8 +487,10 @@ class DockerClient:
         iterateSettings=None,
         iterate=False,
         runDockerMap=False,
-        nextFlowMap=False
+        nextFlowMap=False,
+        runId=None
     ):
+        sys.stderr.write("\n\n\nRUNID: {}\n\n\n".format(runId))
         # reset logFile when it is not None - can be "" though - this allows an active reset
         if logFile is not None:
             self.logFile = logFile
@@ -482,6 +529,7 @@ class DockerClient:
             )
         consoleProc.state = "running"
         for dcmd in dockerCmds:
+            self.download_file_deps(dcmd, runId)
             sys.stderr.write("{}\n".format(dcmd))
         # pass on iterateSettings
         if iterate and iterateSettings:
@@ -506,6 +554,9 @@ class DockerClient:
         else:
             sys.stderr.write("starting runDockerJob.sh\n")
             consoleProc.start(dockerCmds,outputFile=outputFile)
+            sys.stderr.write("\n\n\nBeginning file sync\n\n\n")
+            remote_data_path = self.get_remote_path("/data", runId)
+            self.sync_dir("/data", remote_data_path)
     
     def findShareMountPoint(self,overwrite=False):
         if not os.getenv('BWBSHARE' or overwrite):

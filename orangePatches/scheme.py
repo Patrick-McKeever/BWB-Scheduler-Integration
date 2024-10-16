@@ -6,6 +6,7 @@ Scheme Workflow
 The :class:`Scheme` class defines a DAG (Directed Acyclic Graph) workflow.
 
 """
+import uuid
 import types
 from operator import itemgetter
 from collections import deque
@@ -109,6 +110,9 @@ class Scheme(QObject):
         self.__nodes = []
         self.__links = []
         self.__env = dict(env)
+        self.runId = str(uuid.uuid4())
+
+        log.debug("\n\n\n\n\nCONSTRUCTOR\n\n\n\n")
 
     @property
     def nodes(self):
@@ -208,9 +212,12 @@ class Scheme(QObject):
         .SchemeNode, Scheme.add_node
 
         """
+        log.debug("\n\n\n\n\nNEW NODE\n\n\n\n")
+        props_updated = properties if properties is not None else {}
+        props_updated['runId'] = self.runId
         if isinstance(description, WidgetDescription):
             node = SchemeNode(
-                description, title=title, position=position, properties=properties
+                description, title=title, position=position, properties=props_updated
             )
         else:
             raise TypeError(

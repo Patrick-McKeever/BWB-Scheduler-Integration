@@ -116,6 +116,8 @@ RUN curl -L "https://github.com/docker/compose/releases/download/1.23.2/docker-c
 #Change app name to Bwb
 RUN sed -i 's/"Orange Canvas"/"Bwb"/' /orange3/Orange/canvas/config.py
 
+RUN pip3 install fsspec s3fs
+
 COPY fluxbox_config/ /root/.fluxbox/
 COPY user_config/ /root/
 

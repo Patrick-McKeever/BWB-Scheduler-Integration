@@ -17,6 +17,7 @@ companion :class:`WidgetsSignalManager` class.
 
 """
 import sys
+import uuid
 import logging
 import traceback
 import enum
@@ -66,6 +67,7 @@ class WidgetsScheme(Scheme):
 
         self.signal_manager.stateChanged.connect(onchanged)
         self.widget_manager.set_scheme(self)
+        self.runId = str(uuid.uuid4())
 
     def widget_for_node(self, node):
         """

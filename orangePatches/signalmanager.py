@@ -10,6 +10,7 @@ widgets in a scheme.
 import sys
 import logging
 import warnings
+import uuid
 
 from collections import namedtuple, defaultdict, deque
 from operator import attrgetter
@@ -86,6 +87,7 @@ class SignalManager(QObject):
         self.__reschedule = False
         self.__update_timer = QTimer(self, interval=100, singleShot=True)
         self.__update_timer.timeout.connect(self.__process_next)
+        self.runId = str(uuid.uuid4())
 
     def _can_process(self):
         """
@@ -124,6 +126,7 @@ class SignalManager(QObject):
 
         """
         if self.__state != SignalManager.Stoped:
+            # self.runId = str(uuid.uuid4())
             self.__state = SignalManager.Stoped
             self.stateChanged.emit(SignalManager.Stoped)
             self.__update_timer.stop()
@@ -161,6 +164,7 @@ class SignalManager(QObject):
         Should only be called by `SignalManager` implementations.
 
         """
+        log.debug("\n\nSetting runtime state to %r\n\n", str(state))
         if self.__runtime_state != state:
             self.__runtime_state = state
             self.runtimeStateChanged.emit(self.__runtime_state)
@@ -256,9 +260,10 @@ class SignalManager(QObject):
         """
         """
         log.debug(
-            "%r sending %r (id: %r) on channel %r",
+            "%r sending %r (id: %r, val: %r) on channel %r",
             node.title,
             type(value),
+            str(value),
             id,
             channel.name,
         )
@@ -266,12 +271,25 @@ class SignalManager(QObject):
         scheme = self.scheme()
 
         self._node_outputs[node][channel][id] = value
-
+        
         links = scheme.find_links(source_node=node, source_channel=channel)
         links = list(filter(is_enabled, links))
 
         signals = []
         for link in links:
+            # If source uses scheduler but sink doesn't, we need to download
+            # files outputs from the scheduler API.
+            if link.source_node.properties['useScheduler'] and not link.sink_node.properties['useScheduler']:
+                # Check that value is 
+                log.debug("\n1: %r -> %r: %r\n",
+                    link.source_node.title, link.sink_node.title, value)
+
+            # If sink uses scheduler but source doesn't, we need to upload
+            # files outputs to the scheduler API.
+            if link.sink_node.properties['useScheduler'] and not link.source_node.properties['useScheduler']:
+                log.debug("\n2: %r -> %r: %r\n",
+                    link.source_node.title, link.sink_node.title, value)
+
             signals.append(_Signal(link, value, id))
 
         self._schedule(signals)

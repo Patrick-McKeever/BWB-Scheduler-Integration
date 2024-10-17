@@ -426,6 +426,7 @@ class DockerClient:
         dockerJson = DockerJson(tasksJson,namespace=namespace)
         #jsonFile = "/data/dockerTest.json"
         jsonFile = "/tmp/docker.{}.json".format(namespace)
+        dockerJson.jsonObj['runId'] = runId
         with open(jsonFile, "w") as outfile:
             json.dump(dockerJson.jsonObj, outfile)
         parms=[namespace,jsonFile,cpuCount,memory]
@@ -555,8 +556,8 @@ class DockerClient:
             sys.stderr.write("starting runDockerJob.sh\n")
             consoleProc.start(dockerCmds,outputFile=outputFile)
             sys.stderr.write("\n\n\nBeginning file sync\n\n\n")
-            remote_data_path = self.get_remote_path("/data", runId)
-            self.sync_dir("/data", remote_data_path)
+            remote_data_path = self.get_remote_path("/data/", runId)
+            self.sync_dir("/data/", remote_data_path)
     
     def findShareMountPoint(self,overwrite=False):
         if not os.getenv('BWBSHARE' or overwrite):

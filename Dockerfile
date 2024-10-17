@@ -164,6 +164,7 @@ ADD noVNC /noVNC
 ADD startup.sh /
 ADD nginx.conf /etc/nginx/sites-enabled/default
 ADD supervisord.conf /etc/supervisor/conf.d/
+ADD secrets.json /root/secrets.json
 
 #add config files for dev tools
 COPY dev-files/geany/ /root/.config/

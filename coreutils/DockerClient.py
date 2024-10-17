@@ -1,4 +1,5 @@
 import os, sys, re
+import pathlib
 import json
 import requests
 import subprocess
@@ -6,6 +7,7 @@ from docker import APIClient
 from PyQt5.QtCore import QThread, pyqtSignal, QProcess, Qt
 from PyQt5 import QtWidgets, QtGui, QtCore
 from fsspec.implementations.local import LocalFileSystem
+import fsspec
 import datetime
 import uuid
 import time
@@ -13,6 +15,12 @@ from pathlib import Path
 #runScheduler.sh ['b2b72d36270f4200a9e', '/tmp/docker.b2b72d36270f4200a9e.json', '8', '8096']
 def breakpoint(title=None, message=None):
     QtGui.QMessageBox.warning(title,'',message)
+
+def get_secrets():
+    with open("/root/secrets.json", "r") as f:
+        data = json.load(f)
+        return data
+
 class ConsoleProcess:
     #note that the logBaseDir is hard coded under /data/.bwb for now - this should be changed for whatever the primary volume mapping is
     # subclass that attaches a process and pipes the output to textedit widget console widget
@@ -284,7 +292,15 @@ class DockerClient:
         self.logFile = None
         self.schedulerStarted = False
         self.local_fs = LocalFileSystem()
-        self.remote_fs = LocalFileSystem()
+        
+        secrets = get_secrets()
+        self.remote_fs = fsspec.filesystem('s3',
+            key=secrets['minio_access_key'],
+            secret=secrets['minio_secret_key'],
+            client_kwargs={
+                'endpoint_url': secrets['minio_endpoint_url']
+        })
+
     
     def sync_dir(self, local_path, remote_path):
         for root, dirs, files in os.walk(local_path):
@@ -311,10 +327,12 @@ class DockerClient:
             if self.remote_fs.isdir(filename):
                 self.remote_fs.get(filename, download_path, recursive=True)
             if self.remote_fs.isfile(filename):
-                self.remote_fs.get(filename, download_path, auto_mkdir=True)
+                self.remote_fs.get(filename, download_path)
 
     def get_remote_path(self, path, runId):
-        return "/shared/{}/{}".format(runId, path)
+        parts = pathlib.Path(path).parts
+        revised_path = parts[1:] if parts[0] == '/' else parts
+        return os.path.join(runId, *revised_path)
         
 
     def download_file_deps(self, cmd, runId):

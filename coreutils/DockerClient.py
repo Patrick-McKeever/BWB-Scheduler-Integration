@@ -4,7 +4,7 @@ import json
 import requests
 import subprocess
 from docker import APIClient
-from PyQt5.QtCore import QThread, pyqtSignal, QProcess, Qt
+from PyQt5.QtCore import QThread, pyqtSignal, QProcess, Qt, QTimer, QEventLoop
 from PyQt5 import QtWidgets, QtGui, QtCore
 from fsspec.implementations.local import LocalFileSystem
 import fsspec
@@ -20,6 +20,70 @@ def get_secrets():
     with open("/root/secrets.json", "r") as f:
         data = json.load(f)
         return data
+def get_remote_path(path, runId):
+    parts = pathlib.Path(path).parts
+    revised_path = parts[1:] if parts[0] == '/' else parts
+    return os.path.join(runId, *revised_path)
+
+class APIRequest(QThread):
+    result_ready = pyqtSignal(object)
+    def __init__(self, req_json, output_file, finished_handler):
+        super().__init__()
+        self.req_json = req_json
+        self.output_file = output_file
+        self.finished_handler = finished_handler
+
+    def run(self):
+        r = requests.post("http://localhost:8000/docker/start", json=self.req_json)
+        print("Submitting request {}".format(self.req_json))
+
+        code = 1
+        status = -1
+        if r.status_code == 200:
+            result = r.json()
+            sys.stderr.write("Received following from docker/start endpoint\n")
+            sys.stderr.write(str(result) + "\n")
+            if result["success"]:
+                with open(self.output_file, 'w+') as f:
+                    sys.stderr.write("Writing outputs to " + self.output_file + "\n")
+                    json.dump([result["outputs"]], f)
+
+                    code = 0
+                    status = 0
+
+        #if self.finished_handler:
+        #    sys.stderr.write("\n\n\n\n\nCallinf finish handler\n".format(r.status_code))
+        #    sys.stderr.write("Received HTTP code {}\n".format(r.status_code))
+        #    self.finished_handler(code=code, status=status)
+        #else:
+        #    sys.stderr.write("\n\n\n\nNo finish handler\n\n\n")
+
+class UploadDependenciesProcess(QThread):
+    def __init__(self, remote_fs, cmds, run_id):
+        super().__init__()
+        self.remote_fs = remote_fs
+        self.cmds = cmds
+        self.run_id = run_id
+
+    def upload_file(self, filename, upload_path):
+        if os.path.exists(filename) and not self.remote_fs.exists(upload_path):
+            sys.stderr.write("Uploading {} to {}\n".format(filename, upload_path))
+            if os.path.isdir(filename):
+                self.remote_fs.put(filename, upload_path, recursive=True)
+            if os.path.isfile(filename):
+                self.remote_fs.put(filename, upload_path)
+            print("Finished upload\n")
+        else:
+            sys.stderr.write("Unable to upload non-existent {}\n".format(filename))
+
+    def run(self):
+        sys.stderr.write("Running upload file deps\n")
+        for cmd in self.cmds:
+            for word in cmd.split():
+                if os.path.isabs(word):
+                    if os.path.exists(word):
+                        self.upload_file(word, get_remote_path(word, self.run_id))
+
 
 class ConsoleProcess:
     #note that the logBaseDir is hard coded under /data/.bwb for now - this should be changed for whatever the primary volume mapping is
@@ -61,7 +125,7 @@ class ConsoleProcess:
         self.threadNumber = newThreadNumber
         self.logFile="{}/log{}".format(self.logDir,self.threadNumber)
         self.changeConsole()
-    
+
     def changeConsole(self):
         if self.process.state() == 0:
             self.writeFileToConsole(self.logFile)
@@ -294,6 +358,8 @@ class DockerClient:
         self.local_fs = LocalFileSystem()
         
         secrets = get_secrets()
+        self.api_worker = None
+        self.file_transfer_worker = None
         self.remote_fs = fsspec.filesystem('s3',
             key=secrets['minio_access_key'],
             secret=secrets['minio_secret_key'],
@@ -329,19 +395,14 @@ class DockerClient:
             if self.remote_fs.isfile(filename):
                 self.remote_fs.get(filename, download_path)
 
-    def get_remote_path(self, path, runId):
-        parts = pathlib.Path(path).parts
-        revised_path = parts[1:] if parts[0] == '/' else parts
-        return os.path.join(runId, *revised_path)
-        
+
 
     def download_file_deps(self, cmd, runId):
         for word in cmd.split():
             if os.path.isabs(word):
                 if not os.path.exists(word):
                     self.download_file(
-                        self.get_remote_path(word, runId), 
-                        word)
+                        get_remote_path(word, runId), word)
 
 
     def getClient(self):
@@ -396,6 +457,15 @@ class DockerClient:
                         maxRam = ramSize
         return maxThreads, maxRam
 
+    def await_file_transfer(self):
+        spinner = QEventLoop()
+        def check_completed():
+            if self.file_transfer_worker.finished_work:
+                spinner.quit()
+
+        QTimer.singleShot(100, check_completed)
+        spinner.exec_()
+
     def create_container_external(
         self,
         name,
@@ -415,7 +485,6 @@ class DockerClient:
         outputFile=None,
         runId=None
     ):
-        sys.stderr.write("\n\n\nRUNID: {}\n\n\n".format(runId))
         tasksJson = []
         count = 0
         cpuCount='8'
@@ -440,31 +509,42 @@ class DockerClient:
             tasksJson.append(taskJson)
             count += 1
 
-        namespace=str(uuid.uuid4().hex)[0:19]
-        dockerJson = DockerJson(tasksJson,namespace=namespace)
-        #jsonFile = "/data/dockerTest.json"
-        jsonFile = "/tmp/docker.{}.json".format(namespace)
-        dockerJson.jsonObj['runId'] = runId
-        with open(jsonFile, "w") as outfile:
-            json.dump(dockerJson.jsonObj, outfile)
-        parms=[namespace,jsonFile,cpuCount,memory]
-        r = requests.post("http://localhost:8000/docker/start",
-            json=dockerJson.jsonObj)
+        def run_remote_container():
+            namespace = str(uuid.uuid4().hex)[0:19]
+            dockerJson = DockerJson(tasksJson, namespace=namespace)
+            # jsonFile = "/data/dockerTest.json"
+            jsonFile = "/tmp/docker.{}.json".format(namespace)
+            dockerJson.jsonObj['runId'] = runId
+            with open(jsonFile, "w") as outfile:
+                json.dump(dockerJson.jsonObj, outfile)
+            parms = [namespace, jsonFile, cpuCount, memory]
 
-        if r.status_code == 200:
-            result = r.json()
-            sys.stderr.write("Received following from docker/start endpoint\n")
-            sys.stderr.write(str(result) + "\n")
-            if result["success"]:
-                with open(outputFile, 'w+') as f:
-                    sys.stderr.write("Writing outputs to " + outputFile + "\n")
-                    json.dump([ result["outputs"] ], f)
-                if consoleProc.finishHandler:
-                    # Any non-zero code or status is interpreted as error.
-                    consoleProc.finishHandler(code=0, status=0)
-        
-        if consoleProc.finishHandler:
-            consoleProc.finishHandler(code=1, status=-1)
+            self.api_worker = APIRequest(dockerJson.jsonObj, outputFile,
+                                         consoleProc.finishHandler)
+            self.api_worker.finished.connect(consoleProc.finishHandler)
+            self.api_worker.start()
+
+        self.file_transfer_worker = UploadDependenciesProcess(self.remote_fs, cmds, runId)
+        self.file_transfer_worker.finished.connect(run_remote_container)
+        self.file_transfer_worker.start()
+
+        #r = requests.post("http://localhost:8000/docker/start",
+        #    json=dockerJson.jsonObj)
+
+        #if r.status_code == 200:
+        #    result = r.json()
+        #    sys.stderr.write("Received following from docker/start endpoint\n")
+        #    sys.stderr.write(str(result) + "\n")
+        #    if result["success"]:
+        #        with open(outputFile, 'w+') as f:
+        #            sys.stderr.write("Writing outputs to " + outputFile + "\n")
+        #            json.dump([ result["outputs"] ], f)
+        #        if consoleProc.finishHandler:
+        #            # Any non-zero code or status is interpreted as error.
+        #            consoleProc.finishHandler(code=0, status=0)
+        #
+        #if consoleProc.finishHandler:
+        #    consoleProc.finishHandler(code=1, status=-1)
         
     def prettyEnv(self,var):
         if type(var) is list:
@@ -509,7 +589,6 @@ class DockerClient:
         nextFlowMap=False,
         runId=None
     ):
-        sys.stderr.write("\n\n\nRUNID: {}\n\n\n".format(runId))
         # reset logFile when it is not None - can be "" though - this allows an active reset
         if logFile is not None:
             self.logFile = logFile
@@ -573,10 +652,12 @@ class DockerClient:
         else:
             sys.stderr.write("starting runDockerJob.sh\n")
             consoleProc.start(dockerCmds,outputFile=outputFile)
-            sys.stderr.write("\n\n\nBeginning file sync\n\n\n")
-            remote_data_path = self.get_remote_path("/data/", runId)
-            self.sync_dir("/data/", remote_data_path)
-    
+            remote_data_path = get_remote_path("/data/", runId)
+
+            #self.sync_dir("/data/", remote_data_path)
+            #self.file_transfer_worker = SyncDirProcess("/data", remote_data_path, self.remote_fs)
+            #self.file_transfer_worker.start()
+
     def findShareMountPoint(self,overwrite=False):
         if not os.getenv('BWBSHARE' or overwrite):
             bwbshare=""

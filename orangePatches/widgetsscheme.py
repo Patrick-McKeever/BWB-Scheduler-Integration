@@ -24,6 +24,9 @@ import traceback
 import enum
 import requests
 import json
+import pathlib
+import fsspec
+from fsspec.implementations.local import LocalFileSystem
 
 from collections import namedtuple, deque
 from urllib.parse import urlencode
@@ -44,6 +47,18 @@ from ..utils import name_lookup
 from ..resources import icon_loader
 
 log = logging.getLogger(__name__)
+
+
+def get_secrets():
+    with open("/root/secrets.json", "r") as f:
+        data = json.load(f)
+        return data
+
+
+def get_remote_path(path, runId):
+    parts = pathlib.Path(path).parts
+    revised_path = parts[1:] if parts[0] == '/' else parts
+    return os.path.join(runId, *revised_path)
 
 
 class APIRequest(QThread):
@@ -82,6 +97,26 @@ class APIRequest(QThread):
             self.response_signal.emit(r.status_code, None)
 
 
+class UploadDependenciesProcess(QThread):
+    def __init__(self, remote_fs, filename, run_id):
+        super().__init__()
+        self.remote_fs = remote_fs
+        self.filename = filename
+        self.run_id = run_id
+
+    def run(self):
+        upload_path = get_remote_path(self.filename, self.run_id)
+        if os.path.exists(self.filename) and not self.remote_fs.exists(upload_path):
+            sys.stderr.write("Uploading {} to {}\n".format(self.filename, upload_path))
+            if os.path.isdir(self.filename):
+                self.remote_fs.put(self.filename, upload_path, recursive=True)
+            if os.path.isfile(self.filename):
+                self.remote_fs.put(self.filename, upload_path)
+            print("Finished upload\n")
+        else:
+            sys.stderr.write("Unable to upload non-existent {}\n".format(self.filename))
+
+
 class WidgetsScheme(Scheme):
     """
     A Scheme containing Orange Widgets managed with a `WidgetsSignalManager`
@@ -111,9 +146,17 @@ class WidgetsScheme(Scheme):
         self.run_id = str(uuid.uuid4())
         self.ids_to_widgets = None
         self.api_worker = None
+        self.file_transfer_worker = None
         self.status_polling_worker = None
         self.status_polling_timer = QTimer()
         self.current_workflow_id = None
+        secrets = get_secrets()
+        self.remote_fs = fsspec.filesystem('s3',
+                                           key=secrets['minio_access_key'],
+                                           secret=secrets['minio_secret_key'],
+                                           client_kwargs={
+                                               'endpoint_url': secrets['minio_endpoint_url']
+                                           })
 
     def serialize(self):
         current_id = 0
@@ -170,7 +213,25 @@ class WidgetsScheme(Scheme):
         }
         return serialized, id_to_widget
 
+    def get_work_directory(self):
+        start_node = None
+        for node in self.nodes:
+            if node.title == "Start":
+                properties = node.properties
+                if "work_dir" in properties:
+                    return properties["work_dir"]
+                return None
+
+        return None
+
     def run_with_scheduler(self):
+        work_directory = self.get_work_directory()
+        self.file_transfer_worker = UploadDependenciesProcess(
+            self.remote_fs, work_directory, self.run_id)
+        self.file_transfer_worker.finished.connect(self.run_remote_container)
+        self.file_transfer_worker.start()
+
+    def run_remote_container(self):
         serialized, id_to_widget = self.serialize()
         self.ids_to_widgets = id_to_widget
         self.api_worker = APIRequest("http://localhost:8000/start_workflow", serialized)
@@ -217,7 +278,6 @@ class WidgetsScheme(Scheme):
             widget = self.ids_to_widgets[int(node_id)]
             widget.pConsole.writeMessage(logs)
 
-
     def stop_current_workflow(self):
         request = {
             "workflow_id": self.current_workflow_id
@@ -238,8 +298,6 @@ class WidgetsScheme(Scheme):
                 if widget.getStatus() == "running":
                     widget.setStatus("stopped")
                     widget.setStatusMessage("stopped")
-
-
 
     def widget_for_node(self, node):
         """

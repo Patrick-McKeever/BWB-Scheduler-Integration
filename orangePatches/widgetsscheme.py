@@ -212,6 +212,12 @@ class WidgetsScheme(Scheme):
                 widget.disableExec()
                 widget.jobRunning = True
 
+        for node_id, outputs in response["workflow_outputs"].items():
+            logs = outputs["logs"]
+            widget = self.ids_to_widgets[int(node_id)]
+            widget.pConsole.writeMessage(logs)
+
+
     def stop_current_workflow(self):
         request = {
             "workflow_id": self.current_workflow_id

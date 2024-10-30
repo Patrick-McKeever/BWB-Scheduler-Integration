@@ -1,4 +1,5 @@
 import os
+import pprint
 import re
 import sys
 import logging
@@ -443,6 +444,12 @@ class OWBwBWidget(widget.OWWidget):
         # For compatibility if triggers are not being kept
         if not hasattr(self, "triggerReady"):
             self.triggerReady = {}
+
+    def getDockerImage(self):
+        return "{}:{}".format(self._dockerImageName, self._dockerImageTag)
+
+    def getParams(self):
+        return self.data["parameters"]
 
     def getQBGroups(self):
         QBList = []
@@ -2301,6 +2308,12 @@ class OWBwBWidget(widget.OWWidget):
     def startJob(self):
         if self.jobRunning:
             return
+        sys.stderr.write("\n\nSELF.data{}\n\n".format(self.data))
+        if self.data["name"] == "Start":
+            scheme = self.signalManager.scheme()
+            scheme.run_with_scheduler()
+        return
+
         self.hostVolumes = {}
         # check for missing parameters and volumes
         missingParms = self.checkRequiredParms()
@@ -2356,7 +2369,7 @@ class OWBwBWidget(widget.OWWidget):
             runDockerMapFlag=self.data["runDockerMap"]
         if "nextFlowMap" in self.data:
             nextFlowMapFlag=self.data["nextFlowMap"]
-        sys.stderr.write('\n\n\n\n\n\n\n\n\nRUN ID {}\n\n\n\n\n'.format(str(self.__dict__)))
+
         runId = self.signalManager.runId
         if hasattr(self, "useScheduler") and self.useScheduler:
             self.dockerClient.create_container_external(
@@ -2413,6 +2426,16 @@ class OWBwBWidget(widget.OWWidget):
                     mappings.append("{}:{}".format(hostPort, mapping["containerPort"]))
             if mappings:
                 return mappings
+        return None
+
+    def getPortVars(self):
+        if hasattr(self, 'portVars'):
+            return self.portVars
+        return None
+
+    def getRequiredParameters(self):
+        if 'requiredParameters' in self.data:
+            return self.data['requiredParameters']
         return None
 
     def checkRequiredParms(self):
@@ -2976,6 +2999,16 @@ class OWBwBWidget(widget.OWWidget):
         
     # Event handlers
     def onRunClicked(self, button=None):
+        scheme = self.signalManager.scheme()
+        serialized, _ = scheme.serialize()
+        serialized_scheme = json.dumps(serialized)
+        if serialized_scheme is not None:
+            with open('/root/scheme.json', 'w+') as f:
+                f.write(serialized_scheme)
+            sys.stderr.write('\n\n\n\nSERIALIZED SCHEME{}\n\n\n\n'.format(serialized_scheme))
+        else:
+            sys.stderr.write('\n\n\nSERIALIZATION FAILED\n\n\n')
+
         if button and self.useTestMode:
             qm = QtGui.QMessageBox
             ret = qm.question(

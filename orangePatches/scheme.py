@@ -32,6 +32,7 @@ from .errors import (
 from . import readwrite
 
 from ..registry import WidgetDescription, InputSignal, OutputSignal
+import sys
 
 log = logging.getLogger(__name__)
 

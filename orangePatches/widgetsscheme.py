@@ -17,10 +17,14 @@ companion :class:`WidgetsSignalManager` class.
 
 """
 import sys
+import os
 import uuid
 import logging
 import traceback
 import enum
+import requests
+import json
+
 from collections import namedtuple, deque
 from urllib.parse import urlencode
 
@@ -30,6 +34,7 @@ from AnyQt.QtWidgets import QWidget, QShortcut, QLabel, QSizePolicy, QAction
 from AnyQt.QtGui import QKeySequence, QWhatsThisClickedEvent
 
 from AnyQt.QtCore import Qt, QObject, QCoreApplication, QTimer, QEvent
+from PyQt5.QtCore import QThread, pyqtSignal, QEventLoop
 from AnyQt.QtCore import pyqtSignal as Signal
 
 from .signalmanager import SignalManager, compress_signals, can_enable_dynamic
@@ -39,6 +44,42 @@ from ..utils import name_lookup
 from ..resources import icon_loader
 
 log = logging.getLogger(__name__)
+
+
+class APIRequest(QThread):
+    response_signal = pyqtSignal(int, object)
+
+    def __init__(self, endpoint, req_json, output_file=None):
+        super().__init__()
+        self.endpoint = endpoint
+        self.req_json = req_json
+
+        # Set error exit codes by default, to be revised to
+        # successful ones on successful completion
+        self.exit_code = 1
+        self.exit_status = -1
+        self.output_file = output_file
+
+    def run(self):
+        r = requests.post(self.endpoint, json=self.req_json)
+        sys.stderr.write("\nSubmitting request {}\n".format(self.req_json))
+
+        if r.status_code == 200:
+            result = r.json()
+            sys.stderr.write("Received following from {}\n".format(self.endpoint))
+            sys.stderr.write(str(result) + "\n")
+            successful = result["success"] if "success" in result else True
+            if successful and self.output_file is not None:
+                with open(self.output_file, 'w+') as f:
+                    sys.stderr.write("Writing outputs to " + self.output_file + "\n")
+                    json.dump([result["outputs"]], f)
+
+                    self.exit_code = 0
+                    self.exit_status = 0
+
+            self.response_signal.emit(r.status_code, result)
+        else:
+            self.response_signal.emit(r.status_code, None)
 
 
 class WidgetsScheme(Scheme):
@@ -67,7 +108,103 @@ class WidgetsScheme(Scheme):
 
         self.signal_manager.stateChanged.connect(onchanged)
         self.widget_manager.set_scheme(self)
-        self.runId = str(uuid.uuid4())
+        self.run_id = str(uuid.uuid4())
+        self.ids_to_widgets = None
+        self.api_worker = None
+        self.status_polling_worker = None
+        self.status_polling_timer = QTimer()
+
+    def serialize(self):
+        current_id = 0
+        node_to_id = {}
+        id_to_widget = {}
+        nodes = []
+        for node in self.nodes:
+            widget = self.widget_manager.widget_for_node(node)
+            props = node.properties
+            if "savedWidgetGeometry" in props:
+                del props["savedWidgetGeometry"]
+            # Using id here is a potentially bad idea depending
+            # on how orange handles object lifetimes, revisit later.
+            port_mappings = widget.portMappings()
+            nodes.append({
+                "id": current_id,
+                "title": node.title,
+                "description": node.description.name,
+                "parameters": props,
+                "arg_types": widget.getParams(),
+                "image_name": widget.getDockerImage(),
+                "command": widget.data["command"],
+                "port_mappings": port_mappings if port_mappings is not None else [],
+                "port_vars": widget.getPortVars(),
+                "iterate": widget.iterate,
+                "iterate_settings": widget.iterateSettings,
+                "required_parameters": widget.getRequiredParameters(),
+                "options_checked": widget.optionsChecked,
+                "static_env": widget.data["env"] if "env" in widget.data else {}
+            })
+
+            node_to_id[id(node)] = current_id
+            id_to_widget[current_id] = widget
+            current_id += 1
+
+        links = []
+        for link in self.links:
+            source = link.source_node
+            sink = link.sink_node
+            if id(sink) in node_to_id and id(source) in node_to_id:
+                links.append({
+                    "source": node_to_id[id(source)],
+                    "sink": node_to_id[id(sink)],
+                    "source_channel": link.source_channel.name,
+                    "sink_channel": link.sink_channel.name
+                })
+            else:
+                return None
+
+        serialized = {
+            "run_id": self.run_id,
+            "nodes": nodes,
+            "links": links
+        }
+        return serialized, id_to_widget
+
+    def run_with_scheduler(self):
+        serialized, id_to_widget = self.serialize()
+        self.ids_to_widgets = id_to_widget
+        self.api_worker = APIRequest("http://localhost:8000/start_workflow", serialized)
+        self.api_worker.response_signal.connect(self.handle_start_workflow_response)
+        self.api_worker.start()
+
+    def handle_start_workflow_response(self, http_status, response):
+        # Start polling for workflow status
+        if http_status != 200:
+            # Set some failure message in UI
+            pass
+
+        def get_workflow_status():
+            # The response from start_workflow contains workflow ID / run ID,
+            # so we just reuse the response as the request body for status polling.
+            self.status_polling_worker = APIRequest(
+                "http://localhost:8000/workflow_status", response)
+            self.status_polling_worker.response_signal.connect(self.handle_status_update_response)
+            self.status_polling_worker.start()
+
+        self.status_polling_timer.timeout.connect(get_workflow_status)
+        self.status_polling_timer.start(5000)
+
+    def handle_status_update_response(self, http_status, response):
+        if http_status != 200 and self.status_polling_worker is not None:
+            self.status_polling_worker.terminate_polling()
+            self.status_polling_worker = None
+
+        if response["workflow_status"] == "Finished" and self.status_polling_worker is not None:
+            self.status_polling_worker.terminate_polling()
+            self.status_polling_worker = None
+
+        for node_id, status in response["node_status"].items():
+            widget = self.ids_to_widgets[int(node_id)]
+            widget.setStatusMessage(status)
 
     def widget_for_node(self, node):
         """
@@ -722,7 +859,7 @@ class WidgetManager(QObject):
 
     def __try_delete(self, widget):
         if not (
-            self.__widget_processing_state[widget] & WidgetManager._DelayDeleteMask
+                self.__widget_processing_state[widget] & WidgetManager._DelayDeleteMask
         ):
             log.debug("Delayed delete for widget %s", widget)
             self.__delay_delete.remove(widget)
@@ -795,9 +932,9 @@ class WidgetsSignalManager(SignalManager):
     def is_blocking(self, node):
         """Reimplemented from `SignalManager`"""
         mask = (
-            WidgetManager.InputUpdate
-            | WidgetManager.BlockingUpdate
-            | WidgetManager.Initializing
+                WidgetManager.InputUpdate
+                | WidgetManager.BlockingUpdate
+                | WidgetManager.Initializing
         )
         return self.scheme().widget_manager.node_processing_state(node) & mask
 

@@ -2309,14 +2309,21 @@ class OWBwBWidget(widget.OWWidget):
     def startJob(self):
         if self.jobRunning:
             return
-        sys.stderr.write("\n\nSELF.data{}\n\n".format(self.data))
+
+        scheme = self.signalManager.scheme()
         if self.data["name"] == "Start":
-            scheme = self.signalManager.scheme()
-            scheme.run_with_scheduler()
-            self.jobRunning = True
-            self.setStatus("running")
-            self.setStatusMessage("Running")
-        return
+            if not scheme.validate_scheduling():
+                return
+            if self.useScheduler:
+                scheme.run_with_scheduler()
+                self.jobRunning = True
+                self.setStatus("running")
+                self.setStatusMessage("Running")
+
+        if self.useScheduler:
+            return
+
+        runId = scheme.run_id
 
         self.hostVolumes = {}
         # check for missing parameters and volumes
@@ -2374,7 +2381,6 @@ class OWBwBWidget(widget.OWWidget):
         if "nextFlowMap" in self.data:
             nextFlowMapFlag=self.data["nextFlowMap"]
 
-        runId = self.signalManager.runId
         if hasattr(self, "useScheduler") and self.useScheduler:
             self.dockerClient.create_container_external(
                 imageName,
@@ -3010,16 +3016,6 @@ class OWBwBWidget(widget.OWWidget):
         
     # Event handlers
     def onRunClicked(self, button=None):
-        scheme = self.signalManager.scheme()
-        serialized, _ = scheme.serialize()
-        serialized_scheme = json.dumps(serialized)
-        if serialized_scheme is not None:
-            with open('/root/scheme.json', 'w+') as f:
-                f.write(serialized_scheme)
-            sys.stderr.write('\n\n\n\nSERIALIZED SCHEME{}\n\n\n\n'.format(serialized_scheme))
-        else:
-            sys.stderr.write('\n\n\nSERIALIZATION FAILED\n\n\n')
-
         if button and self.useTestMode:
             qm = QtGui.QMessageBox
             ret = qm.question(
@@ -3091,6 +3087,21 @@ class OWBwBWidget(widget.OWWidget):
                 if hasattr(self, "handleOutputs"):
                     self.handleOutputs()
         self.initTriggers()
+
+    def updateOutputsFromScheduler(self, outputs):
+        sys.stderr.write("Updating outputs w/ {}".format(outputs))
+        for k, v in outputs.items():
+            sys.stderr.write("Setting {}={}\n".format(k, v))
+            if hasattr(self, k):
+                setattr(self, k, v)
+
+    def handleOutputsFromScheduler(self):
+        if hasattr(self, "handleOutputs"):
+            self.handleOutputs()
+        self.initTriggers()
+
+
+
     def updateOutputs(self):
         outputData=[]
         jsonData=""

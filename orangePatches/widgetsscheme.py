@@ -33,7 +33,7 @@ from urllib.parse import urlencode
 
 import sip
 
-from AnyQt.QtWidgets import QWidget, QShortcut, QLabel, QSizePolicy, QAction
+from AnyQt.QtWidgets import QWidget, QShortcut, QLabel, QSizePolicy, QAction, QMessageBox
 from AnyQt.QtGui import QKeySequence, QWhatsThisClickedEvent
 
 from AnyQt.QtCore import Qt, QObject, QCoreApplication, QTimer, QEvent
@@ -144,6 +144,8 @@ class WidgetsScheme(Scheme):
         self.signal_manager.stateChanged.connect(onchanged)
         self.widget_manager.set_scheme(self)
         self.run_id = str(uuid.uuid4())
+
+
         self.ids_to_widgets = None
         self.api_worker = None
         self.file_transfer_worker = None
@@ -157,6 +159,54 @@ class WidgetsScheme(Scheme):
                                            client_kwargs={
                                                'endpoint_url': secrets['minio_endpoint_url']
                                            })
+
+    def show_error(self, error):
+        error_box = QMessageBox()
+        error_box.setIcon(QMessageBox.Critical)
+        error_box.setWindowTitle("Scheduler Error")
+        error_box.setText(error)
+        error_box.setStandardButtons(QMessageBox.Ok)
+        error_box.exec_()
+
+    def validate_scheduling(self):
+        start_node_scheduled = False
+        other_nodes_scheduled = False
+        for node in self.nodes:
+            widget = self.widget_manager.widget_for_node(node)
+            if widget.useScheduler:
+                if node.title == "Start":
+                    start_node_scheduled = True
+                else:
+                    other_nodes_scheduled = True
+
+        if other_nodes_scheduled and not start_node_scheduled:
+            self.show_error(
+                "If any nodes in your workflow are managed by the "
+                "scheduler, the Start node must be as well. Furthermore, "
+                "there cannot be links from non-scheduled nodes to "
+                "scheduled ones. (I.e. All non-scheduled nodes "
+                "should be clustered at the end of the workflow.)"
+            )
+            return False
+
+        for link in self.links:
+            source = link.source_node
+            sink = link.sink_node
+            source_widget = self.widget_manager.widget_for_node(source)
+            sink_widget = self.widget_manager.widget_for_node(sink)
+
+            # All locally-run nodes should be located at end of workflow.
+            if sink_widget.useScheduler and not source_widget.useScheduler:
+                self.show_error(
+                    "The given workflow contains a link from a node "
+                    "with useScheduler set to False to a node with "
+                    "useScheduler set to True. Please ensure that "
+                    "all nodes using the scheduler have predecessors "
+                    "that also use the scheduler. (I.e. All non-scheduled "
+                    "nodes should be clustered at the end of the workflow.)"
+                )
+                return False
+        return True
 
     def serialize(self):
         current_id = 0
@@ -196,6 +246,7 @@ class WidgetsScheme(Scheme):
         for link in self.links:
             source = link.source_node
             sink = link.sink_node
+
             if id(sink) in node_to_id and id(source) in node_to_id:
                 links.append({
                     "source": node_to_id[id(source)],
@@ -204,7 +255,7 @@ class WidgetsScheme(Scheme):
                     "sink_channel": link.sink_channel.name
                 })
             else:
-                return None
+                return None, None
 
         serialized = {
             "run_id": self.run_id,
@@ -233,6 +284,9 @@ class WidgetsScheme(Scheme):
 
     def run_remote_container(self):
         serialized, id_to_widget = self.serialize()
+        if serialized is None:
+            return
+
         self.ids_to_widgets = id_to_widget
         self.api_worker = APIRequest("http://localhost:8000/start_workflow", serialized)
         self.api_worker.response_signal.connect(self.handle_start_workflow_response)
@@ -275,8 +329,11 @@ class WidgetsScheme(Scheme):
 
         for node_id, outputs in response["workflow_outputs"].items():
             logs = outputs["logs"]
+            outputs = outputs["outputs"]
             widget = self.ids_to_widgets[int(node_id)]
             widget.pConsole.writeMessage(logs)
+            widget.updateOutputsFromScheduler(outputs)
+            widget.handleOutputsFromScheduler()
 
     def stop_current_workflow(self):
         request = {

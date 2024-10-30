@@ -398,6 +398,7 @@ class DockerClient:
 
 
     def download_file_deps(self, cmd, runId):
+        sys.stderr.write("\n\nDownloading file deps for {}\n\n".format(cmd))
         for word in cmd.split():
             if os.path.isabs(word):
                 if not os.path.exists(word):

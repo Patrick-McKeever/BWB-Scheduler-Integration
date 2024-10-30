@@ -441,6 +441,7 @@ class OWBwBWidget(widget.OWWidget):
 
         # keep track of gui elements associated with each attribute
         self.bgui = BwbGuiElements()
+        self.status = None
         # For compatibility if triggers are not being kept
         if not hasattr(self, "triggerReady"):
             self.triggerReady = {}
@@ -2312,6 +2313,9 @@ class OWBwBWidget(widget.OWWidget):
         if self.data["name"] == "Start":
             scheme = self.signalManager.scheme()
             scheme.run_with_scheduler()
+            self.jobRunning = True
+            self.setStatus("running")
+            self.setStatusMessage("Running")
         return
 
         self.hostVolumes = {}
@@ -2432,6 +2436,13 @@ class OWBwBWidget(widget.OWWidget):
         if hasattr(self, 'portVars'):
             return self.portVars
         return None
+
+    def getStatus(self):
+        return self.status
+
+    def setStatus(self, status):
+        self.status = status
+
 
     def getRequiredParameters(self):
         if 'requiredParameters' in self.data:
@@ -3030,9 +3041,12 @@ class OWBwBWidget(widget.OWWidget):
         self.startJob()
         
     def onStopClicked(self):
-        self.pConsole.stop("Stopped by user")
-        self.setStatusMessage("Stopped")
-        self.status = "stopped"
+        scheme = self.signalManager.scheme()
+        scheme.stop_current_workflow()
+
+        #self.pConsole.stop("Stopped by user")
+        #self.setStatusMessage("Stopped")
+        #self.status = "stopped"
         if self.jobRunning or self.repeat:
             self.bgui.reenableAll(self)
             self.reenableExec()

@@ -113,6 +113,7 @@ class WidgetsScheme(Scheme):
         self.api_worker = None
         self.status_polling_worker = None
         self.status_polling_timer = QTimer()
+        self.current_workflow_id = None
 
     def serialize(self):
         current_id = 0
@@ -185,6 +186,7 @@ class WidgetsScheme(Scheme):
         def get_workflow_status():
             # The response from start_workflow contains workflow ID / run ID,
             # so we just reuse the response as the request body for status polling.
+            self.current_workflow_id = response["workflow_id"]
             self.status_polling_worker = APIRequest(
                 "http://localhost:8000/workflow_status", response)
             self.status_polling_worker.response_signal.connect(self.handle_status_update_response)
@@ -199,12 +201,39 @@ class WidgetsScheme(Scheme):
             self.status_polling_worker = None
 
         if response["workflow_status"] == "Finished" and self.status_polling_worker is not None:
-            self.status_polling_worker.terminate_polling()
-            self.status_polling_worker = None
+            self.status_polling_timer.stop()
+            self.current_workflow_id = None
 
         for node_id, status in response["node_status"].items():
             widget = self.ids_to_widgets[int(node_id)]
             widget.setStatusMessage(status)
+            if status == "Running":
+                widget.setStatus("running")
+                widget.disableExec()
+                widget.jobRunning = True
+
+    def stop_current_workflow(self):
+        request = {
+            "workflow_id": self.current_workflow_id
+        }
+        self.api_worker = APIRequest(
+            "http://localhost:8000/stop_workflow",
+            request
+        )
+        self.api_worker.response_signal.connect(self.handle_stopped_workflow)
+        self.api_worker.start()
+
+    def handle_stopped_workflow(self, http_status, response):
+        if http_status == 200 and response["success"]:
+            self.status_polling_timer.stop()
+            self.current_workflow_id = None
+
+            for widget_id, widget in self.ids_to_widgets.items():
+                if widget.getStatus() == "running":
+                    widget.setStatus("stopped")
+                    widget.setStatusMessage("stopped")
+
+
 
     def widget_for_node(self, node):
         """

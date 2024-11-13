@@ -380,6 +380,8 @@ class OWBwBWidget(widget.OWWidget):
     submitIcon = QtGui.QIcon("/icons/submit.png")
     reloadIcon = QtGui.QIcon("icons/reload.png")
     useScheduler = settings.Setting(False, schema_only=True)
+    is_async = settings.Setting(False, schema_only=True)
+    end_async = settings.Setting(False, schema_only=True)
     pset = functools.partial(settings.Setting, schema_only=True)
     nWorkers = pset(1)
     iterateSettings = pset({})
@@ -832,6 +834,17 @@ class OWBwBWidget(widget.OWWidget):
                         setattr(self, pname, pvalue["default"])
                         sys.stderr.write("default value is {}\n".format(pvalue["default"]))
         return optionalList
+
+    def update_async(self, state):
+        self.is_async = bool(state)
+        self.data["is_async"] = state
+        self.show()
+
+    def update_end_async(self, state):
+        self.end_async = bool(state)
+        self.data["end_async"] = state
+        self.show()
+
     def drawScheduleElements(self):
         with open(self.serversFile) as f:
             serverSettings = jsonpickle.decode(f.read())
@@ -871,6 +884,21 @@ class OWBwBWidget(widget.OWWidget):
         self.schedulerComboBox.currentIndex = 0
         schedulerBox.addWidget(self.schedulerLabel)
         schedulerBox.addWidget(self.schedulerComboBox)
+
+        asyncBox = QHBoxLayout()
+        self.asyncLabel = QtGui.QLabel("Async")
+        asyncBox.addWidget(self.asyncLabel)
+        self.asyncCheckbox = gui.checkBox(None, self, "is_async", label="")
+        self.asyncCheckbox.stateChanged.connect(self.update_async)
+        asyncBox.addWidget(self.asyncCheckbox)
+
+        endAsyncBox = QHBoxLayout()
+        self.endAsyncLabel = QtGui.QLabel("End Async")
+        endAsyncBox.addWidget(self.endAsyncLabel)
+        self.endAsyncCheckbox = gui.checkBox(None, self, "end_async", label="")
+        self.endAsyncCheckbox.stateChanged.connect(self.update_end_async)
+        endAsyncBox.addWidget(self.endAsyncCheckbox)
+
 
         cbLabel = QtGui.QLabel("Number of workers: ")
         if not hasattr(self, "nWorkers"):
@@ -939,7 +967,9 @@ class OWBwBWidget(widget.OWWidget):
 
         self.fileDirScheduleLayout.addLayout(scheduleBox, 1, 0)
         self.fileDirScheduleLayout.addLayout(threadBox, 2, 0)
-        
+        self.fileDirScheduleLayout.addLayout(asyncBox, 3, 0)
+        self.fileDirScheduleLayout.addLayout(endAsyncBox, 4, 0)
+
     def setIteration(self):
         iterateDialog = IterateDialog(self.iterateSettings)
         iterateDialog.exec_()

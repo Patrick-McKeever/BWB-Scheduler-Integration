@@ -98,23 +98,24 @@ class APIRequest(QThread):
 
 
 class UploadDependenciesProcess(QThread):
-    def __init__(self, remote_fs, filename, run_id):
+    def __init__(self, remote_fs, files, run_id):
         super().__init__()
         self.remote_fs = remote_fs
-        self.filename = filename
+        self.files = files
         self.run_id = run_id
 
     def run(self):
-        upload_path = get_remote_path(self.filename, self.run_id)
-        if os.path.exists(self.filename) and not self.remote_fs.exists(upload_path):
-            sys.stderr.write("Uploading {} to {}\n".format(self.filename, upload_path))
-            if os.path.isdir(self.filename):
-                self.remote_fs.put(self.filename, upload_path, recursive=True)
-            if os.path.isfile(self.filename):
-                self.remote_fs.put(self.filename, upload_path)
-            print("Finished upload\n")
-        else:
-            sys.stderr.write("Unable to upload non-existent {}\n".format(self.filename))
+        for filename in self.files:
+            upload_path = get_remote_path(filename, self.run_id)
+            if os.path.exists(filename) and not self.remote_fs.exists(upload_path):
+                sys.stderr.write("Uploading {} to {}\n".format(filename, upload_path))
+                if os.path.isdir(filename):
+                    self.remote_fs.put(filename, upload_path, recursive=True)
+                if os.path.isfile(filename):
+                    self.remote_fs.put(filename, upload_path)
+                print("Finished upload\n")
+            else:
+                sys.stderr.write("Unable to upload non-existent {}\n".format(filename))
 
 
 class WidgetsScheme(Scheme):
@@ -152,6 +153,10 @@ class WidgetsScheme(Scheme):
         self.status_polling_worker = None
         self.status_polling_timer = QTimer()
         self.current_workflow_id = None
+        # This is meant to help keep track of what is currently logged to
+        # a given widget's console. Since we poll the API, we only want to
+        # write a widget's logs to its console if those logs are different than before
+        self.widget_last_logs = {}
         secrets = get_secrets()
         self.remote_fs = fsspec.filesystem('s3',
                                            key=secrets['minio_access_key'],
@@ -216,6 +221,14 @@ class WidgetsScheme(Scheme):
         for node in self.nodes:
             widget = self.widget_manager.widget_for_node(node)
             props = node.properties
+
+            is_async = False
+            if hasattr(widget, "is_async"):
+                is_async = widget.is_async
+            end_async = False
+            if hasattr(widget, "end_async"):
+                end_async = widget.end_async
+
             if "savedWidgetGeometry" in props:
                 del props["savedWidgetGeometry"]
             # Using id here is a potentially bad idea depending
@@ -223,6 +236,8 @@ class WidgetsScheme(Scheme):
             port_mappings = widget.portMappings()
             nodes.append({
                 "id": current_id,
+                "async": is_async,
+                "end_async": end_async,
                 "title": node.title,
                 "description": node.description.name,
                 "parameters": props,
@@ -259,26 +274,29 @@ class WidgetsScheme(Scheme):
 
         serialized = {
             "run_id": self.run_id,
+            #"run_id": "bulkrna",
             "nodes": nodes,
             "links": links
         }
         return serialized, id_to_widget
 
-    def get_work_directory(self):
+    def get_file_deps(self):
         start_node = None
         for node in self.nodes:
             if node.title == "Start":
+                file_deps = []
                 properties = node.properties
-                if "work_dir" in properties:
-                    return properties["work_dir"]
-                return None
+                for prop_name, prop_val in properties.items():
+                    if type(prop_val) is str and os.path.isabs(prop_val):
+                        file_deps.append(prop_val)
+                return file_deps
 
-        return None
+        return []
 
     def run_with_scheduler(self):
-        work_directory = self.get_work_directory()
+        file_deps = self.get_file_deps()
         self.file_transfer_worker = UploadDependenciesProcess(
-            self.remote_fs, work_directory, self.run_id)
+            self.remote_fs, file_deps, self.run_id)
         self.file_transfer_worker.finished.connect(self.run_remote_container)
         self.file_transfer_worker.start()
 
@@ -331,7 +349,9 @@ class WidgetsScheme(Scheme):
             logs = outputs["logs"]
             outputs = outputs["outputs"]
             widget = self.ids_to_widgets[int(node_id)]
-            widget.pConsole.writeMessage(logs)
+            if node_id not in self.widget_last_logs or self.widget_last_logs[node_id] != logs:
+                widget.pConsole.writeMessage(logs)
+                self.widget_last_logs[node_id] = logs
             widget.updateOutputsFromScheduler(outputs)
             widget.handleOutputsFromScheduler()
 

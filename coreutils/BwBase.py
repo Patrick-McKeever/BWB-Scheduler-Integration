@@ -42,6 +42,9 @@ from AnyQt.QtWidgets import (
     QApplication,
     QCheckBox,
 )
+import logging
+
+log = logging.getLogger(__name__)
 
 
 def breakpoint(title=None, message=None):
@@ -241,11 +244,11 @@ class BwbGuiElements:
             if ignoreCheckbox:
                 for g in self._dict[attr]:
                     if not isinstance(g, QtWidgets.QCheckBox):
-                        sys.stderr.write("ignore cb, {} disabling {}\n".format(attr, g))
+                        #sys.stderr.write("ignore cb, {} disabling {}\n".format(attr, g))
                         self.disableElement(g)
             else:
                 for g in self._dict[attr]:
-                    sys.stderr.write("{} disabling {}\n".format(attr, g)),
+                    #sys.stderr.write("{} disabling {}\n".format(attr, g)),
                     self.disableElement(g)
             return True
         return False
@@ -269,24 +272,24 @@ class BwbGuiElements:
                         element.clear()
             else:
                 if isinstance(g, QtWidgets.QLineEdit):
-                    sys.stderr.write("clearing line edit {}\n".format(g))
+                    #sys.stderr.write("clearing line edit {}\n".format(g))
                     g.clear()
             i = i + 1
 
     def enable(self, attr, value):
-        sys.stderr.write("checking attr {}\n".format(attr))
+        #sys.stderr.write("checking attr {}\n".format(attr))
         clearLedit = False
         if value is None or value == "":
             clearLedit = True
         if attr in self._dict:
-            sys.stderr.write("found attr in dict {}\n".format(attr))
+            #sys.stderr.write("found attr in dict {}\n".format(attr))
             if attr in self._enableCallbacks:
-                sys.stderr.write("enable callback for {}\n".format(attr))
+                #sys.stderr.write("enable callback for {}\n".format(attr))
                 self._enableCallbacks[attr](value, clearLedit)
             else:
-                sys.stderr.write("enable for {}\n".format(attr))
+                #sys.stderr.write("enable for {}\n".format(attr))
                 for g in self._dict[attr]:
-                    sys.stderr.write("enable element {}\n".format(g))
+                    #sys.stderr.write("enable element {}\n".format(g))
                     self.enableElement(g)
         return True
 
@@ -314,10 +317,10 @@ class ConnectionDict:
             self._dict[slot].append(connectionId)
         else:
             self._dict[slot] = [connectionId]
-        sys.stderr.write("Adding {} to connection {}\n".format(slot, self._dict[slot]))
+        #sys.stderr.write("Adding {} to connection {}\n".format(slot, self._dict[slot]))
 
     def remove(self, slot, connectionId=None):
-        sys.stderr.write("removing {} to connection {}\n".format(slot, connectionId))
+        #sys.stderr.write("removing {} to connection {}\n".format(slot, connectionId))
         if slot in self._dict:
             if connectionId is None:
                 del self._dict[slot]
@@ -344,11 +347,11 @@ class ConnectionDict:
         if self._dict is None:
             return False
         if slot in self._dict:
-            sys.stderr.write(
-                "slot found in connection check with contents {} and ID {}\n".format(
-                    self._dict[slot], connectionId
-                )
-            )
+            #sys.stderr.write(
+            #    "slot found in connection check with contents {} and ID {}\n".format(
+            #        self._dict[slot], connectionId
+            #    )
+            #)
             if connectionId:
                 if connectionId in self._dict[slot]:
                     return True
@@ -382,6 +385,8 @@ class OWBwBWidget(widget.OWWidget):
     useScheduler = settings.Setting(False, schema_only=True)
     is_async = settings.Setting(False, schema_only=True)
     end_async = settings.Setting(False, schema_only=True)
+    end_async_title = settings.Setting(None, schema_only=True)
+    numSlots = settings.Setting(1, schema_only=True)
     pset = functools.partial(settings.Setting, schema_only=True)
     nWorkers = pset(1)
     iterateSettings = pset({})
@@ -447,6 +452,25 @@ class OWBwBWidget(widget.OWWidget):
         # For compatibility if triggers are not being kept
         if not hasattr(self, "triggerReady"):
             self.triggerReady = {}
+
+        self.upstream_nodes = set()
+        self.endAsyncComboBox = None
+        self.upstream_title_to_id = {}
+        self.numSlotsLabel = None
+        self.numSlotsInput = None
+
+    def add_upstream_node(self, node):
+        self.upstream_nodes.add(node)
+        if self.endAsyncComboBox is not None:
+            self.endAsyncComboBox.clear()
+            self.endAsyncComboBox.addItem("")
+            for upstream_node in self.upstream_nodes:
+                scheme = self.signalManager.scheme()
+                self.upstream_title_to_id[upstream_node.title] = scheme.get_node_id(upstream_node)
+                self.endAsyncComboBox.addItem(upstream_node.title)
+            index = self.endAsyncComboBox.findText(self.end_async_title)
+            if index != -1:
+                self.endAsyncComboBox.setCurrentIndex(index)
 
     def getDockerImage(self):
         return "{}:{}".format(self._dockerImageName, self._dockerImageTag)
@@ -700,10 +724,10 @@ class OWBwBWidget(widget.OWWidget):
                 and pvalue["type"] != "str"
                 and pvalue["type"] != type("text")
             ):
-                sys.stderr.write("type is {} {}\n".format(pvalue["type"], type("text")))
+                #sys.stderr.write("type is {} {}\n".format(pvalue["type"], type("text")))
                 continue
             if isOptional:
-                sys.stderr.write("type is {} {}\n".format(pvalue["type"], type("text")))
+                #sys.stderr.write("type is {} {}\n".format(pvalue["type"], type("text")))
                 self.drawLedit(
                     pname,
                     pvalue,
@@ -794,11 +818,12 @@ class OWBwBWidget(widget.OWWidget):
                             )
                         )
                     else:
-                        sys.stderr.write(
-                            "{} has prevous value {} of type {}\n".format(
-                                pname, getattr(self, pname), type(getattr(self, pname))
-                            )
-                        )
+                        pass
+                        #sys.stderr.write(
+                        #    "{} has prevous value {} of type {}\n".format(
+                        #        pname, getattr(self, pname), type(getattr(self, pname))
+                        #    )
+                        #)
                     requiredList.append(pname)
                 else:
                     #no label but these initializations are necessary in case the definition has changed 
@@ -844,6 +869,15 @@ class OWBwBWidget(widget.OWWidget):
         self.end_async = bool(state)
         self.data["end_async"] = state
         self.show()
+
+    def updateEndAsyncVal(self):
+        if self.endAsyncComboBox is None:
+            return
+        cur_text = self.endAsyncComboBox.currentText()
+        self.end_async_title = cur_text
+
+    def changeNumSlots(self):
+        self.numSlots = int(self.numSlotsInput.text())
 
     def drawScheduleElements(self):
         with open(self.serversFile) as f:
@@ -893,12 +927,38 @@ class OWBwBWidget(widget.OWWidget):
         asyncBox.addWidget(self.asyncCheckbox)
 
         endAsyncBox = QHBoxLayout()
-        self.endAsyncLabel = QtGui.QLabel("End Async")
-        endAsyncBox.addWidget(self.endAsyncLabel)
         self.endAsyncCheckbox = gui.checkBox(None, self, "end_async", label="")
         self.endAsyncCheckbox.stateChanged.connect(self.update_end_async)
+        self.endAsyncLabel = QtGui.QLabel("End Async")
         endAsyncBox.addWidget(self.endAsyncCheckbox)
+        endAsyncBox.addWidget(self.endAsyncLabel)
 
+        scheme = self.signalManager.scheme()
+        self.endAsyncComboBox = QtGui.QComboBox()
+        self.endAsyncComboBox.addItem("")
+        for upstream_node in self.upstream_nodes:
+            scheme = self.signalManager.scheme()
+            self.endAsyncComboBox.addItem(upstream_node.title)
+            self.upstream_title_to_id[upstream_node.title] = scheme.get_node_id(upstream_node)
+        self.endAsyncComboBox.setCurrentIndex(0)
+        endAsyncBox.addWidget(self.endAsyncComboBox)
+        self.endAsyncComboBox.activated.connect(self.updateEndAsyncVal)
+        self.endAsyncComboBox.setEnabled(self.endAsyncCheckbox.isChecked())
+        self.endAsyncCheckbox.stateChanged.connect(
+            lambda: self.endAsyncComboBox.setEnabled(self.endAsyncCheckbox.isChecked())
+        )
+
+        numSlotsBox = QHBoxLayout()
+        self.numSlotsLabel = QLabel("Max concurrent node executions")
+        self.numSlotsInput = QLineEdit(self)
+        self.numSlotsInput.setPlaceholderText("Enter number")
+        self.numSlotsInput.textChanged.connect(self.changeNumSlots)
+        numSlotsBox.addWidget(self.numSlotsLabel)
+        numSlotsBox.addWidget(self.numSlotsInput)
+        self.numSlotsInput.setEnabled(self.endAsyncCheckbox.isChecked())
+        self.endAsyncCheckbox.stateChanged.connect(
+            lambda: self.numSlotsInput.setEnabled(self.endAsyncCheckbox.isChecked())
+        )
 
         cbLabel = QtGui.QLabel("Number of workers: ")
         if not hasattr(self, "nWorkers"):
@@ -969,6 +1029,7 @@ class OWBwBWidget(widget.OWWidget):
         self.fileDirScheduleLayout.addLayout(threadBox, 2, 0)
         self.fileDirScheduleLayout.addLayout(asyncBox, 3, 0)
         self.fileDirScheduleLayout.addLayout(endAsyncBox, 4, 0)
+        self.fileDirScheduleLayout.addLayout(numSlotsBox, 5, 0)
 
     def setIteration(self):
         iterateDialog = IterateDialog(self.iterateSettings)
@@ -2180,17 +2241,17 @@ class OWBwBWidget(widget.OWWidget):
 
     def updateCheckbox(self, pname, state, value=None):
         self.optionsChecked[pname] = state
-        sys.stderr.write(
-            "updating checkbox pname {} connect {} isChecked {}\n".format(
-                pname, self.inputConnections.isConnected(pname), state
-            )
-        )
+        #sys.stderr.write(
+        #    "updating checkbox pname {} connect {} isChecked {}\n".format(
+        #        pname, self.inputConnections.isConnected(pname), state
+        #    )
+        #)
         if not (self.inputConnections.isConnected(pname)) and state:
             self.bgui.enable(pname, value)
-            sys.stderr.write("enabled\n")
+            #sys.stderr.write("enabled\n")
         elif not (self.inputConnections.isConnected(pname)) and not state:
             self.bgui.disable(pname, ignoreCheckbox=True)
-            sys.stderr.write("disabled\n")
+            #sys.stderr.write("disabled\n")
 
     def enableSpin(self, value, clearLedit, cb, spin):
         if cb is None:

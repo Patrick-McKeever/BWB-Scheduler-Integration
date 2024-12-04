@@ -67,6 +67,20 @@ class WidgetsScheme(Scheme):
         self.signal_manager.stateChanged.connect(onchanged)
         self.widget_manager.set_scheme(self)
 
+    def upstream_nodes_of_widget(self, widget):
+        start_node = self.node_for_widget(widget)
+        return self.upstream_nodes(start_node)
+
+    def async_upstream_nodes_of_widget(self, widget):
+        start_node = self.node_for_widget(widget)
+        upstream_nodes = self.upstream_nodes(start_node)
+        async_upstream = []
+        for upstream_node in upstream_nodes:
+            upstream_widget = self.widget_for_node(upstream_node)
+            if upstream_widget.is_async:
+                async_upstream.append(upstream_node)
+        return async_upstream
+
     def widget_for_node(self, node):
         """
         Return the OWWidget instance for a `node`.

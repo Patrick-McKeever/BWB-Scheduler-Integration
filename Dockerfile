@@ -130,6 +130,7 @@ COPY orangePatches/link.py /orange3/Orange/canvas/scheme/link.py
 COPY orangePatches/signals.py /orange3/Orange/widgets/utils/signals.py
 COPY orangePatches/linkitem.py /orange3/Orange/canvas/canvas/items/linkitem.py
 COPY orangePatches/__main__.py /orange3/Orange/canvas/__main__.py
+COPY orangePatches/scheme.py /orange3/Orange/canvas/scheme/scheme.py
 COPY orangePatches/discovery.py /orange3/Orange/canvas/registry/discovery.py
 
 #add bwb start scripts

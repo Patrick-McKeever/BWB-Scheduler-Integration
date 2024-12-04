@@ -33,6 +33,7 @@ from . import readwrite
 
 from ..registry import WidgetDescription, InputSignal, OutputSignal
 import sys
+from collections import defaultdict
 
 log = logging.getLogger(__name__)
 
@@ -112,8 +113,11 @@ class Scheme(QObject):
         self.__links = []
         self.__env = dict(env)
         self.runId = str(uuid.uuid4())
+        self.node_to_id = {}
+        self.id_to_node = {}
+        self.max_id = 0
+        self.node_ancestors = defaultdict(set)
 
-        log.debug("\n\n\n\n\nCONSTRUCTOR\n\n\n\n")
 
     @property
     def nodes(self):
@@ -187,6 +191,18 @@ class Scheme(QObject):
         self.__nodes.append(node)
         log.info("Added node %r to scheme %r." % (node.title, self.title))
         self.node_added.emit(node)
+        self.node_to_id[id(node)] = self.max_id
+        self.id_to_node[self.max_id] = node
+        self.max_id += 1
+
+    def get_node_id(self, node):
+        return self.node_to_id[id(node)]
+
+    def get_node_by_id(self, node_id):
+        return self.id_to_node[node_id]
+
+
+
 
     def new_node(self, description, title=None, position=None, properties=None):
         """
@@ -213,7 +229,6 @@ class Scheme(QObject):
         .SchemeNode, Scheme.add_node
 
         """
-        log.debug("\n\n\n\n\nNEW NODE\n\n\n\n")
         props_updated = properties if properties is not None else {}
         props_updated['runId'] = self.runId
         if isinstance(description, WidgetDescription):

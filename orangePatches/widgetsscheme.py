@@ -173,6 +173,19 @@ class WidgetsScheme(Scheme):
         error_box.setStandardButtons(QMessageBox.Ok)
         error_box.exec_()
 
+    def get_upstream_nodes_of_widget(self, widget):
+        node = self.node_for_widget(widget)
+        return self.upstream_nodes(node)
+
+    def get_async_upstream_nodes_of_widget(self, widget):
+        upstream_nodes = self.get_upstream_nodes_of_widget(widget)
+        async_upstream = []
+        for upstream_node in upstream_nodes:
+            widget = self.widget_for_node(upstream_node)
+            if widget.is_async:
+                async_upstream.append(upstream_node)
+        return async_upstream
+
     def validate_scheduling(self):
         start_node_scheduled = False
         other_nodes_scheduled = False
@@ -214,11 +227,10 @@ class WidgetsScheme(Scheme):
         return True
 
     def serialize(self):
-        current_id = 0
-        node_to_id = {}
         id_to_widget = {}
         nodes = []
         for node in self.nodes:
+            current_id = self.node_to_id[id(node)]
             widget = self.widget_manager.widget_for_node(node)
             props = node.properties
 
@@ -238,6 +250,9 @@ class WidgetsScheme(Scheme):
                 "id": current_id,
                 "async": is_async,
                 "end_async": end_async,
+                "barrier_for":
+                    widget.upstream_title_to_id[widget.end_async_title] if widget.end_async_title else None,
+                "slots": widget.numSlots,
                 "title": node.title,
                 "description": node.description.name,
                 "parameters": props,
@@ -253,7 +268,6 @@ class WidgetsScheme(Scheme):
                 "static_env": widget.data["env"] if "env" in widget.data else {}
             })
 
-            node_to_id[id(node)] = current_id
             id_to_widget[current_id] = widget
             current_id += 1
 
@@ -262,10 +276,10 @@ class WidgetsScheme(Scheme):
             source = link.source_node
             sink = link.sink_node
 
-            if id(sink) in node_to_id and id(source) in node_to_id:
+            if id(sink) in self.node_to_id and id(source) in self.node_to_id:
                 links.append({
-                    "source": node_to_id[id(source)],
-                    "sink": node_to_id[id(sink)],
+                    "source": self.node_to_id[id(source)],
+                    "sink": self.node_to_id[id(sink)],
                     "source_channel": link.source_channel.name,
                     "sink_channel": link.sink_channel.name
                 })
@@ -852,6 +866,18 @@ class WidgetManager(QObject):
         # Schedule an update with the signal manager, due to the cleared
         # implicit Initializing flag
         self.signal_manager()._update()
+
+        for nodea in self.scheme().nodes:
+            upstream_nodes = self.scheme().upstream_nodes(nodea)
+            for upstream_node in upstream_nodes:
+                log.debug("{} UPSTREAM: {}\n".format(nodea.title, upstream_node.title))
+                widget.add_upstream_node(upstream_node)
+
+            downstream_nodes = self.scheme().downstream_nodes(nodea)
+            for downstream_node in downstream_nodes:
+                log.debug("{} DOWNSTREAM: {}\n".format(nodea.title, downstream_node.title))
+                downstream_widget = self.widget_for_node(downstream_node)
+                downstream_widget.add_upstream_node(nodea)
 
         return widget
 

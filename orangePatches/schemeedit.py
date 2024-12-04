@@ -1393,7 +1393,7 @@ class SchemeEditWidget(QWidget):
             self.__itemsMoving[annot] = (old, geometry_from_annotation_item(item))
 
     def __onAnnotationAdded(self, item):
-        log.debug("Annotation added (%r)", item)
+        #log.debug("Annotation added (%r)", item)
         item.setFlag(QGraphicsItem.ItemIsSelectable)
         item.setFlag(QGraphicsItem.ItemIsMovable)
         item.setFlag(QGraphicsItem.ItemIsFocusable)
